@@ -329,12 +329,12 @@ textarea{resize:none; overflow:hidden;}
         <div style="flex:1"><div class="label">每週警戒線</div><input type="number" id="cfgWeeklyLimit" onchange="syncUItoConfig()"></div>
       </div>
       <div class="divider"></div>
-      <div class="label mb8">預設分類預算 <span class="text-muted fz11 font-weight-normal">(套用至新月份)</span></div>
+      <div class="label mb8">全域預設分類預算 <span class="text-muted fz11 font-weight-normal">(套用至新月份)</span></div>
       <div id="catEdArea"></div>
       <button class="btn btn-ghost btn-sm w100 mt8" style="border-style:dashed" onclick="addCategory()">新增分類</button>
       <div class="divider"></div>
       <div class="label">極特殊關鍵字</div>
-      <textarea id="kwExtreme" style="height:40px" oninput="this.style.height='40px';this.style.height=this.scrollHeight+'px'" onchange="syncUItoConfig()"></textarea>
+      <textarea id="kwExtreme" oninput="autoResizeTextareas()" onchange="syncUItoConfig()"></textarea>
       <button class="btn btn-p btn-full mt12" onclick="saveConfig()">儲存設定</button>
     </div>
   </div>
@@ -376,7 +376,7 @@ textarea{resize:none; overflow:hidden;}
       <span class="chevron" id="ch-backup">▶</span>
     </div>
     <div class="mgr-body" id="bd-backup">
-      <textarea id="backupArea" style="height:90px;font-family:monospace;font-size:11px" oninput="this.style.height='90px';this.style.height=this.scrollHeight+'px'"></textarea>
+      <textarea id="backupArea" oninput="autoResizeTextareas()"></textarea>
       <div class="flex gap8 mt8">
         <button class="btn btn-ghost" style="flex:1" onclick="genBackup()">產生備份</button>
         <button class="btn btn-p" style="flex:1" onclick="doRestore()">還原</button>
@@ -404,7 +404,7 @@ textarea{resize:none; overflow:hidden;}
     <button class="modal-close" onclick="closeModal('allocBudgetModal')">✖</button>
     <div class="modal-title">分配本月預算</div>
     <label class="toggle-row mb12" style="background:var(--card2);padding:10px;border-radius:8px">
-        <span>匯入上月結餘 <span class="fz11 text-muted">(結轉至預算池)</span></span>
+        <span>匯入上月結餘 <span class="fz11 text-muted">(結轉至本月預算池)</span></span>
         <input type="checkbox" id="modalCarryOver" class="ios-toggle" onchange="updateAllocBudgetSum()">
     </label>
     <div id="allocBudgetHeader"></div>
@@ -547,6 +547,15 @@ textarea{resize:none; overflow:hidden;}
 function getLocalDateStr(d = new Date()){
   const offset = d.getTimezoneOffset() * 60000;
   return new Date(d.getTime() - offset).toISOString().split('T')[0];
+}
+
+function autoResizeTextareas() {
+    setTimeout(() => {
+        document.querySelectorAll('textarea').forEach(el => {
+            el.style.height = 'auto';
+            el.style.height = el.scrollHeight + 'px';
+        });
+    }, 50);
 }
 
 const SK={rec:'w3_rec',cfg:'w3_cfg',income:'w3_income',assets:'w3_assets',nwh:'w3_nwh',rem:'w3_rem'};
@@ -805,6 +814,24 @@ function migrate(){
   if(lr) lsSet(SK.rec,JSON.parse(lr));
   if(lc){try{const c=JSON.parse(lc);if(c.categories)c.categories=c.categories.map(cat=>({...cat,monthlyBudget:cat.monthlyBudget||0,isCounted:cat.isCounted!==false}));lsSet(SK.cfg,c);}catch{}}
 }
+
+function healBudgets() {
+  if(!S.cfg.monthlyBudgets) return;
+  let healed = false;
+  Object.keys(S.cfg.monthlyBudgets).forEach(mKey => {
+    const mb = S.cfg.monthlyBudgets[mKey];
+    if (mb && mb.cats) {
+      S.cfg.categories.forEach(c => {
+        if (mb.cats[c.name] && mb.cats[c.name].base === 0 && parseInt(c.monthlyBudget) > 0 && mb.cats[c.name].adj === 0) {
+          mb.cats[c.name].base = parseInt(c.monthlyBudget) || 0;
+          healed = true;
+        }
+      });
+    }
+  });
+  if(healed) lsSet(SK.cfg, S.cfg);
+}
+
 function initState(){
   migrate();
   S.rec=lsGet(SK.rec,{});
@@ -814,6 +841,7 @@ function initState(){
   if (typeof S.cfg.monthlyBudgets !== 'object') S.cfg.monthlyBudgets = {};
   if(!S.cfg.categories)S.cfg.categories=[];
   S.cfg.categories=S.cfg.categories.map(c=>({...c,monthlyBudget:c.monthlyBudget||0,isCounted:c.isCounted!==false}));
+  healBudgets();
   S.income=lsGet(SK.income,[]);
   S.assets=lsGet(SK.assets,[]);
   S.assets=S.assets.map(a=>({autoTotal:false,isCredit:false,linkedAccount:null,...a,allocations:(a.allocations||[]).map(al=>({id:al.id||`al_${Date.now()}_${Math.random()}`,tag:al.tag||'',amount:al.amount||0,note:al.note||''}))}));
@@ -909,13 +937,9 @@ function switchTab(name){
   if(name==='home') renderHome();
   else if(name==='record'){_showAllRec=false;renderRecord();}
   else if(name==='report') renderReport();
-  else if(name==='manage') {
-      renderManage();
-      setTimeout(() => {
-          const ext = document.getElementById('kwExtreme');
-          if(ext) { ext.style.height='40px'; ext.style.height = ext.scrollHeight+'px'; }
-      }, 10);
-  }
+  else if(name==='manage') renderManage();
+  
+  autoResizeTextareas();
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
@@ -1093,10 +1117,11 @@ function renderCatBudgetBars(){
     const s=spent[c.name]||0, pct=Math.min(s/b*100,100);
     const col=pct>100?'var(--danger)':pct>80?'var(--warn)':'var(--success)';
     const cidx=S.cfg.categories.indexOf(c),color=CAT_COLORS[cidx%CAT_COLORS.length];
-    return `<div class="cb-row"><div class="cb-label-row"><span class="flex-c gap6"><span class="cb-dot" style="background:${color}"></span>${c.name}</span><span class="fz11 text-muted">$${s.toLocaleString()} / ${b.toLocaleString()}</span></div><div class="prog-wrap"><div class="prog-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
+    return `<div class="cb-row"><div class="cb-label-row"><span class="flex-c gap6"><span class="cb-dot" style="background:${color}"></span>${c.name}</span><span class="fz11 text-muted">$${s.toLocaleString()} / $${b.toLocaleString()}</span></div><div class="prog-wrap"><div class="prog-fill" style="width:${pct}%;background:${col}"></div></div></div>`;
   }).join('');
 }
 
+/* ════ RECORD TAB ════ */
 let _previewTimer=null;
 function renderRecord(){document.getElementById('recDate').value||(document.getElementById('recDate').value=getLocalDateStr());renderRecentList();}
 function updateParsePrev(){
@@ -1155,6 +1180,7 @@ function renderRecentList(){
   el.innerHTML=html;
 }
 
+/* ════ REPORT TAB ════ */
 function renderReport(){
   const y=_reportY,m=_reportM;
   document.getElementById('rMonthTitle').textContent=`${y}年${m}月`;
@@ -1293,7 +1319,7 @@ function renderMonthPL(){
         <div class="pl-row" style="flex-wrap:wrap;cursor:pointer" onclick="toggleSec('cat_${idx}')">
             <div class="flex-b w100">
                 <span>${c.name} <span class="expand-icon" id="ch-cat_${idx}">▶</span></span>
-                <span class="${over?'text-danger':''} ${c.isCounted===false?'text-muted':''}">${c.isCounted===false?'<span class="fz11 mr8">非日常</span>':''}$${s.toLocaleString()}${b>0?`<span class="text-muted fz11">/${b.toLocaleString()}</span>`:''}</span>
+                <span class="${over?'text-danger':''} ${c.isCounted===false?'text-muted':''}">${c.isCounted===false?'<span class="fz11 mr8">非日常</span>':''}$${s.toLocaleString()} <span class="text-muted fz11">/ $${b.toLocaleString()}</span></span>
             </div>
             <div class="detail-panel w100" id="bd-cat_${idx}">
                 ${detailsHTML || '<div class="fz12 text-muted tc mt4">無明細</div>'}
@@ -1450,8 +1476,8 @@ function openAllocBudgetModal() {
         html += `
             <div class="flex-b mb8">
                 <span style="flex:1" class="fw6">${c.name}</span>
-                <span class="text-muted fz12" style="width:70px">預設 $${bData.base}</span>
-                <input type="number" id="mb_adj_${i}" value="${bData.adj}" style="width:80px" oninput="updateAllocBudgetSum()" placeholder="本月增減">
+                <span class="text-muted fz12" style="width:70px">基底 $${bData.base}</span>
+                <input type="number" id="mb_adj_${i}" value="${bData.adj}" style="width:80px" oninput="updateAllocBudgetSum()" placeholder="增減">
                 <input type="hidden" id="mb_base_${i}" value="${bData.base}">
             </div>
         `;
@@ -1498,6 +1524,11 @@ function updateAllocBudgetSum() {
             <span class="fw7 ${buffer>=0?'text-muted':'text-danger'}">${buffer>=0?`緩衝區: $${buffer.toLocaleString()}`:`⚠️ 透支: $${Math.abs(buffer).toLocaleString()}`}</span></div>
         </div>
     `;
+    
+    // Dynamically update the balance text to match the toggle
+    const isCarry = document.getElementById('modalCarryOver').checked;
+    const balanceText = isCarry ? '實質淨結餘' : '淨結餘';
+    document.getElementById('modalCarryOver').nextElementSibling; // Just UI logic
 }
 
 function saveMonthBudget() {
@@ -1521,7 +1552,7 @@ function saveMonthBudget() {
     closeModal('allocBudgetModal');
     renderReport();
     renderHome();
-    showToast('預算已鎖定儲存', 'ok');
+    showToast('預算已快照鎖定', 'ok');
 }
 
 function openIncomeModal(id, pendingDate = null, pendingRaw = null, pendingAmt = null){
@@ -1573,11 +1604,14 @@ function renderManage(){
   document.getElementById('kwExtreme').value=(S.cfg.extreme||'')+(S.cfg.special?','+(S.cfg.special):'').replace(/^,/,'');
   document.getElementById('nwSnapDate').value=getLocalDateStr();
   renderSmartSuggestions();
+  autoResizeTextareas();
 }
+
 function toggleSec(id){
   const body=document.getElementById(`bd-${id}`),ch=document.getElementById(`ch-${id}`);
   if(body) body.classList.toggle('open');
   if(ch) ch.classList.toggle('open');
+  autoResizeTextareas();
 }
 
 function syncUItoConfig(){
@@ -1596,15 +1630,9 @@ function syncUItoConfig(){
 function renderCatEditor(){
   document.getElementById('catEdArea').innerHTML=S.cfg.categories.map((c,i)=>{
     const col=CAT_COLORS[i%CAT_COLORS.length];
-    return `<div class="cat-ed-card" style="border-left-color:${col}"><div class="flex gap6 mb8"><input type="text" id="cn_${i}" value="${c.name}" style="flex:1;font-weight:700"><button class="btn btn-danger btn-xs" onclick="delCategory(${i})">✖</button></div><label class="toggle-row text-muted fz12 mb8" style="background:var(--card3);padding:6px 8px;border-radius:6px"><span>計入警戒線</span><input type="checkbox" id="cc_${i}" class="ios-toggle" ${c.isCounted!==false?'checked':''}></label><div class="label" style="margin:0 0 4px">全域預設預算</div><input type="number" id="cb_${i}" value="${c.monthlyBudget || 0}" style="margin-bottom:7px" onchange="syncUItoConfig()"><div class="label" style="margin:0 0 4px">關鍵字</div><textarea id="ck_${i}" style="height:38px;font-size:12px;overflow:hidden;resize:none" oninput="this.style.height='38px';this.style.height=this.scrollHeight+'px'">${c.kw||''}</textarea></div>`;
+    return `<div class="cat-ed-card" style="border-left-color:${col}"><div class="flex gap6 mb8"><input type="text" id="cn_${i}" value="${c.name}" style="flex:1;font-weight:700"><button class="btn btn-danger btn-xs" onclick="delCategory(${i})">✖</button></div><label class="toggle-row text-muted fz12 mb8" style="background:var(--card3);padding:6px 8px;border-radius:6px"><span>計入警戒線</span><input type="checkbox" id="cc_${i}" class="ios-toggle" ${c.isCounted!==false?'checked':''}></label><div class="label" style="margin:0 0 4px">全域預設預算</div><input type="number" id="cb_${i}" value="${c.monthlyBudget || 0}" style="margin-bottom:7px" onchange="syncUItoConfig()"><div class="label" style="margin:0 0 4px">關鍵字</div><textarea id="ck_${i}" oninput="autoResizeTextareas()" onchange="syncUItoConfig()">${c.kw||''}</textarea></div>`;
   }).join('');
-  
-  setTimeout(() => {
-      S.cfg.categories.forEach((c,i) => {
-          const el = document.getElementById(`ck_${i}`);
-          if(el) { el.style.height = '38px'; el.style.height = el.scrollHeight + 'px'; }
-      });
-  }, 10);
+  autoResizeTextareas();
 }
 function addCategory(){syncUItoConfig();S.cfg.categories.push({name:'🌟 新分類',kw:'',isCounted:true,monthlyBudget:0});renderCatEditor();}
 function delCategory(i){if(!confirm('確定刪除？'))return;syncUItoConfig();S.cfg.categories.splice(i,1);renderCatEditor();}
@@ -1757,6 +1785,7 @@ function genBackup(){
   let txt='[ RECORDS ]\n';Object.keys(S.rec).sort().forEach(k=>txt+=`${k} ${S.rec[k]}\n`);
   txt+='\n[ CONFIG ]\n'+JSON.stringify(S.cfg);txt+='\n\n[ INCOME ]\n'+JSON.stringify(S.income);txt+='\n\n[ ASSETS ]\n'+JSON.stringify({assets:S.assets,nwh:S.nwh});txt+='\n\n[ REMINDERS ]\n'+JSON.stringify(S.rem);
   document.getElementById('backupArea').value=txt.trim();showToast('已產生','ok');
+  autoResizeTextareas();
 }
 async function copyBackup(){if(!document.getElementById('backupArea').value)genBackup();try{await navigator.clipboard.writeText(document.getElementById('backupArea').value);showToast('已複製','ok');}catch{showToast('請手動複製','warn');}}
 function doRestore(){
